@@ -204,17 +204,7 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 			return fmt.Errorf("unmarshal ws settings error: %s", err)
 		}
 	case "grpc":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.GRPCConfig)
-		if err != nil {
-			return fmt.Errorf("unmarshal grpc settings error: %s", err)
-		}
-	case "http":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.HTTPSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal grpc settings error: %s", err)
-		}
-	case "quic":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.QUICSettings)
+		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.GRPCSettings)
 		if err != nil {
 			return fmt.Errorf("unmarshal grpc settings error: %s", err)
 		}
@@ -223,10 +213,10 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 		if err != nil {
 			return fmt.Errorf("unmarshal httpupgrade settings error: %s", err)
 		}
-	case "splithttp":
+	case "splithttp", "xhttp":
 		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.SplitHTTPSettings)
 		if err != nil {
-			return fmt.Errorf("unmarshal splithttp settings error: %s", err)
+			return fmt.Errorf("unmarshal xhttp settings error: %s", err)
 		}
 	default:
 		return errors.New("the network type is not vail")
@@ -272,7 +262,7 @@ func buildTrojan(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCo
 			return fmt.Errorf("unmarshal ws settings error: %s", err)
 		}
 	case "grpc":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.GRPCConfig)
+		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.GRPCSettings)
 		if err != nil {
 			return fmt.Errorf("unmarshal grpc settings error: %s", err)
 		}

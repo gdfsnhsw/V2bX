@@ -21,13 +21,13 @@ var limiter map[string]*Limiter
 func Init() {
 	limiter = map[string]*Limiter{}
 	c := task.Periodic{
-		Interval: time.Minute * 2,
+		Interval: time.Minute * 3,
 		Execute:  ClearOnlineIP,
 	}
 	go func() {
 		log.WithField("Type", "Limiter").
 			Debug("ClearOnlineIP started")
-		time.Sleep(time.Minute * 2)
+		time.Sleep(time.Minute * 3)
 		_ = c.Start()
 	}()
 }
@@ -37,10 +37,12 @@ type Limiter struct {
 	ProtocolRules []string
 	SpeedLimit    int
 	UserOnlineIP  *sync.Map      // Key: Name, value: {Key: Ip, value: Uid}
-	UUIDtoUID     map[string]int // Key: UUID, value: UID
+	OldUserOnline *sync.Map 	 // Key: Ip, value: Uid
+	UUIDtoUID     map[string]int // Key: UUID, value: Uid
 	UserLimitInfo *sync.Map      // Key: Uid value: UserLimitInfo
 	ConnLimiter   *ConnLimiter   // Key: Uid value: ConnLimiter
 	SpeedLimiter  *sync.Map      // key: Uid, value: *ratelimit.Bucket
+	AliveList     map[int]int    // Key: Uid, value: alive_ip
 }
 
 type UserLimitInfo struct {
@@ -52,13 +54,15 @@ type UserLimitInfo struct {
 	OverLimit         bool
 }
 
-func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo) *Limiter {
+func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveList map[int]int) *Limiter {
 	info := &Limiter{
 		SpeedLimit:    l.SpeedLimit,
 		UserOnlineIP:  new(sync.Map),
 		UserLimitInfo: new(sync.Map),
 		ConnLimiter:   NewConnLimiter(l.ConnLimit, l.IPLimit, l.EnableRealtime),
 		SpeedLimiter:  new(sync.Map),
+		AliveList:     aliveList,
+		OldUserOnline: new(sync.Map),
 	}
 	uuidmap := make(map[string]int)
 	for i := range users {
@@ -100,7 +104,9 @@ func DeleteLimiter(tag string) {
 func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
 	for i := range deleted {
 		l.UserLimitInfo.Delete(format.UserTag(tag, deleted[i].Uuid))
+		l.UserOnlineIP.Delete(format.UserTag(tag, deleted[i].Uuid))
 		delete(l.UUIDtoUID, deleted[i].Uuid)
+		delete(l.AliveList, deleted[i].Id)
 	}
 	for i := range added {
 		userLimit := &UserLimitInfo{
@@ -163,18 +169,27 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 		// Store online user for device limit
 		ipMap := new(sync.Map)
 		ipMap.Store(ip, uid)
+		aliveIp := l.AliveList[uid]
 		// If any device is online
 		if v, ok := l.UserOnlineIP.LoadOrStore(taguuid, ipMap); ok {
 			ipMap := v.(*sync.Map)
 			// If this is a new ip
 			if _, ok := ipMap.LoadOrStore(ip, uid); !ok {
-				counter := 0
-				ipMap.Range(func(key, value interface{}) bool {
-					counter++
-					return true
-				})
-				if counter > deviceLimit && deviceLimit > 0 {
-					ipMap.Delete(ip)
+				if deviceLimit > 0 {
+					if deviceLimit <= aliveIp {
+						ipMap.Delete(ip)
+						return nil, true
+					}
+				}
+			}	
+		} else if v, ok := l.OldUserOnline.Load(ip); ok{
+			if v.(int) == uid {
+				l.OldUserOnline.Delete(ip)
+			}
+		} else {
+			if deviceLimit > 0 {
+				if deviceLimit <= aliveIp {
+					l.UserOnlineIP.Delete(taguuid)
 					return nil, true
 				}
 			}
@@ -197,17 +212,17 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
 	var onlineUser []panel.OnlineUser
-
 	l.UserOnlineIP.Range(func(key, value interface{}) bool {
-		email := key.(string)
+		taguuid := key.(string)
 		ipMap := value.(*sync.Map)
 		ipMap.Range(func(key, value interface{}) bool {
 			uid := value.(int)
 			ip := key.(string)
+			l.OldUserOnline.Store(ip, uid)
 			onlineUser = append(onlineUser, panel.OnlineUser{UID: uid, IP: ip})
 			return true
 		})
-		l.UserOnlineIP.Delete(email) // Reset online device
+		l.UserOnlineIP.Delete(taguuid) // Reset online device
 		return true
 	})
 
@@ -217,24 +232,4 @@ func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {
 type UserIpList struct {
 	Uid    int      `json:"Uid"`
 	IpList []string `json:"Ips"`
-}
-
-func determineDeviceLimit(nodeLimit, userLimit int) (limit int) {
-	if nodeLimit == 0 || userLimit == 0 {
-		if nodeLimit > userLimit {
-			return nodeLimit
-		} else if nodeLimit < userLimit {
-			return userLimit
-		} else {
-			return 0
-		}
-	} else {
-		if nodeLimit > userLimit {
-			return userLimit
-		} else if nodeLimit < userLimit {
-			return nodeLimit
-		} else {
-			return nodeLimit
-		}
-	}
 }
